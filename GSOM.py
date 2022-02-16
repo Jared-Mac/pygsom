@@ -18,15 +18,20 @@ class Node:
 
 class GSOM:
     def addStartNodes(self):
-        n1 = Node(0,0)
-        n2 = Node(0.5,0.5)
-        n3 = Node(1,1)
+        # n1 = Node(0,0)
+        # n2 = Node(0.5,0.5)
+        # n3 = Node(1,1)
+
+        n1 = Node(self.data[0][0],self.data[0][1])
+        n2 = Node(self.data[1][0],self.data[1][1])
+        n3 = Node(self.data[-1][0],self.data[-1][1])
         n1.right = n2
         n2.left, n2.right = n1,n3
         n3.left = n2
         self.nodes.append(n1)
         self.nodes.append(n2)
         self.nodes.append(n3)
+
     def __init__(self,dataset,spread_factor,radius):
         # Possible parameters
         # Neighborhood function (Gauss vs Bubble vs Combined)
@@ -36,6 +41,7 @@ class GSOM:
         self.spread_factor = spread_factor
         # growth_threshold = -2 * ln(self.spread_factor)
         self.growth_threshold = -2 * np.log(self.spread_factor)
+        print(f"Growth Threshold = {self.growth_threshold}")
         self.nodes = []
         self.data = dataset
         self.iteration = 0
@@ -46,7 +52,7 @@ class GSOM:
         # learning rate = at iteration k, with r nodes, initial learning rate lr_0
         # d is constant, how much the learning rate should drop
         # lr_0*d^floor((1+k)/r)
-        return 0.01*(0.02**np.floor((1+self.iteration)/len(self.nodes)))
+        return 1*(0.02**np.floor((1+self.iteration)/len(self.nodes)))
     def findWinner(self,input):
         error=float("inf")
         winner = None
@@ -75,45 +81,52 @@ class GSOM:
         # w_j(k),w_j(k+1) are nodes, j, before and after adaption
 
         for node in self.neighborhood(winning_node):
-
             node.array = node.array + self.learningRate() * distance(node.array,input)
-    def growNode(self,winning_node):
-        if winning_node.left != None and winning_node.right != None:
-            pass
-        if winning_node.left == None:
-            new_node = Node(input[0],input[1])
-            winning_node.left = new_node
-        if winning_node.right == None:
-            new_node = Node(input[0],input[1])
-            winning_node.right = new_node
+    def growNode(self,winning_node,input):
+        # if winning_node.left != None and winning_node.right != None:
+        #     pass
+        # if winning_node.left == None:
+        #     new_node = Node(input[0],input[1])
+        #     winning_node.left = new_node
+        #     self.nodes.append(new_node)
+        # if winning_node.right == None:
+        #     new_node = Node(input[0],input[1])
+        #     winning_node.right = new_node
+        #     self.nodes.append(new_node)
+        new_node = Node(input[0],input[1])
+        self.nodes.append(new_node)
+
         winning_node.error = 0
 
     def growing(self):
         # Iterate until terminal condition
         # Grab data point
-        for input in self.data:
+        for x in range(50):
+            for input in self.data:
+                # print(input)
+                # print(f"Iteration #: {self.iteration}")
+                winning_node,error = self.findWinner(input)
+                self.adaptWeights(winning_node,input)
 
-            print(input)
-            print(f"Iteration #: {self.iteration}")
-            winning_node,error = self.findWinner(input)
-            self.adaptWeights(winning_node,input)
 
+                # Increase error value of winner (difference between input and node)
+                # When error value > growth threshold, grow node if winner is a boundary node
+                # Otherwise  distribute weights
 
-            # Increase error value of winner (difference between input and node)
-            # When error value > growth threshold, grow node if winner is a boundary node
-            # Otherwise  distribute weights
+                winning_node.addError(error)
 
-            winning_node.addError(error)
+                if winning_node.error > self.growth_threshold:
+                    print("grow")
+                    self.growNode(winning_node,input)
 
-            if winning_node.error > self.growth_threshold:
-                self.growNode(winning_node)
-
-            self.iteration += 1
-        
+                self.iteration += 1
+            
+            
             
         # Reset LR to start value
 
-        pass
+
+
     def smoothing(self):
         # Reduce learning rate and decrease neighborhood
         # Find winners and adapt weights as in growing phase
