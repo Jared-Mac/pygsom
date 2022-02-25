@@ -4,6 +4,12 @@ from sklearn.metrics import euclidean_distances
 
 def distance(n1,n2):
     return np.linalg.norm(n1-n2)
+def middleNode(n1,n2):
+    x = (n1.array[0] + n2.array[0])/2
+    y = (n1.array[1] + n2.array[1])/2
+    return Node(x,y)
+def getKey(item):
+    return item[1]
 class Node:
     def __init__(self, x,y):
         """Initialize a node object with values x,y"""
@@ -24,7 +30,7 @@ class GSOM:
 
         n1 = Node(self.data[0][0],self.data[0][1])
         n2 = Node(self.data[1][0],self.data[1][1])
-        n3 = Node(self.data[-1][0],self.data[-1][1])
+        n3 = Node(self.data[2][0],self.data[2][1])
         n1.right = n2
         n2.left, n2.right = n1,n3
         n3.left = n2
@@ -32,11 +38,7 @@ class GSOM:
         self.nodes.append(n2)
         self.nodes.append(n3)
 
-    def __init__(self,dataset,spread_factor,radius):
-        # Possible parameters
-        # Neighborhood function (Gauss vs Bubble vs Combined)
-        # Neighborhood Size
-        # Terminal Condition (Such as preset iteration number or low node growth level)
+    def __init__(self,dataset,spread_factor,radius,connected=False,basis=None):
         # Starting Learning Rate
         self.spread_factor = spread_factor
         # growth_threshold = -2 * ln(self.spread_factor)
@@ -47,11 +49,21 @@ class GSOM:
         self.iteration = 0
         self.radius = radius
         self.addStartNodes()
+        self.connected = connected
+        self.smooth = False
+
+        if connected:
+            self.basis = []
+            for pair in basis:
+                self.basis.append(pair[0])
+            self.createClosestBasis()
 
     def learningRate(self):
         # learning rate = at iteration k, with r nodes, initial learning rate lr_0
         # d is constant, how much the learning rate should drop
         # lr_0*d^floor((1+k)/r)
+        if self.smoothing:
+            return 0.5*(0.01**np.floor((1+self.iteration)/len(self.nodes)))
         return 1*(0.02**np.floor((1+self.iteration)/len(self.nodes)))
     def findWinner(self,input):
         error=float("inf")
@@ -63,13 +75,65 @@ class GSOM:
                 winner = node
         return winner, error
     def neighborhood(self,focus):
-
+        radius = self.radius
+        if self.smooth:
+            radius = radius / 3
         neighborhood = []
         for node in self.nodes:
-            if distance(node.array,focus.array) < self.radius:
+            if distance(node.array,focus.array) < radius:
                 neighborhood.append(node)
         return neighborhood
+    def basisInputNeighborhood(self,focus,radius):
+    
+        inputNeighborhood = []
+        for inputData in self.data:
+            if distance(inputData,focus.array) < radius:
+                inputNeighborhood.append(inputData)
+        return inputNeighborhood
 
+    def averageError(self):
+        error = 0
+        for node in self.nodes:
+            error += node.error
+        return error / len(self.nodes)
+    def maxError(self):
+        error = 0
+        for node in self.nodes:
+            if node.error > error:
+                error = node.error
+        return error
+
+    def createClosestBasis(self):
+        new_basis = [self.basis[0]]
+        unseen = self.basis[1:]
+        last_added = self.basis[0]
+        while len(new_basis) != len(self.basis):
+            node_list = []
+            for node in unseen:
+                node_list.append((node,distance(node.array,last_added.array)))
+            node_list = sorted(node_list,key=getKey)
+            new_node = node_list[0][0]
+            # print(unseen)
+            # print(new_node)
+            unseen.remove(new_node)
+            new_basis.append(new_node)
+            last_added = new_node
+
+        self.basis = new_basis
+    def connectNodes(self):
+        origin = np.array([0,0])
+        
+        basis_nodes = []
+        for node in self.nodes:
+            basis_nodes.append((node,distance(node.array, origin)))
+        basis_nodes = sorted(basis_nodes,key=getKey)
+        
+        self.basis = []
+        for pair in basis_nodes:
+            self.basis.append(pair[0])
+        self.createClosestBasis()
+        return self.basis
+    
     def adaptWeights(self,winning_node,input):
         # Adapt weight of winner and nodes within neighborhood
         #   Weights are distributed proportionally to neighborhood nodes by distance to winner
@@ -83,30 +147,56 @@ class GSOM:
         for node in self.neighborhood(winning_node):
             node.array = node.array + self.learningRate() * distance(node.array,input)
     def growNode(self,winning_node,input):
-        # if winning_node.left != None and winning_node.right != None:
-        #     pass
-        # if winning_node.left == None:
-        #     new_node = Node(input[0],input[1])
-        #     winning_node.left = new_node
-        #     self.nodes.append(new_node)
-        # if winning_node.right == None:
-        #     new_node = Node(input[0],input[1])
-        #     winning_node.right = new_node
-        #     self.nodes.append(new_node)
-        new_node = Node(input[0],input[1])
-        self.nodes.append(new_node)
+        if self.connected:
+            if winning_node.left != None and winning_node.right != None:
+                input_node = Node(input[0],input[1])
+                new_node = middleNode(winning_node,input_node)
+                if distance(winning_node.left.array, input_node.array) < distance(winning_node.right.array, input_node.array):
+                    # Add new node to winning_nodes left
+                    # winning_node.left --- new_node --- winning_node
+                    winning_node.left.right = new_node
+                    new_node.right = winning_node
+                    new_node.left = winning_node.left
+                    winning_node.left = new_node
+                    
+                    self.nodes.append(new_node)
+                else: 
+                    # winning_node --- new_node --- winning_node.right
+                    winning_node.right.left = new_node
+                    new_node.left = winning_node
+                    winning_node.right = new_node
+                    new_node.left = winning_node
+                    self.nodes.append(new_node)
+                # pass
+            elif winning_node.left == None:
+                new_node = Node(input[0],input[1])
+                winning_node.left = new_node
+                new_node.right = winning_node
+                self.nodes.append(new_node)
+            elif winning_node.right == None:
+                new_node = Node(input[0],input[1])
+                winning_node.right = new_node
+                new_node.left = winning_node
+                self.nodes.append(new_node)
+        else: 
+            new_node = Node(input[0],input[1])
+            self.nodes.append(new_node)
 
         winning_node.error = 0
 
     def growing(self):
         # Iterate until terminal condition
         # Grab data point
-        for x in range(50):
-            for input in self.data:
+        average_error = float("inf")
+        max_error = float("inf")
+        # for x in range(200):
+        while average_error > 0.07 and max_error > 0.10:
+            for inputData in self.data:
                 # print(input)
                 # print(f"Iteration #: {self.iteration}")
-                winning_node,error = self.findWinner(input)
-                self.adaptWeights(winning_node,input)
+            
+                winning_node,error = self.findWinner(inputData)
+                self.adaptWeights(winning_node,inputData)
 
 
                 # Increase error value of winner (difference between input and node)
@@ -117,25 +207,86 @@ class GSOM:
 
                 if winning_node.error > self.growth_threshold:
                     print("grow")
-                    self.growNode(winning_node,input)
+                    self.growNode(winning_node,inputData)
 
                 self.iteration += 1
-            
-            
+            average_error = self.averageError()
+            print(f"Average error {average_error}")            
+            max_error = self.maxError()
+            print(f"Max error {average_error}")
+
+    def growingConnected(self):
+        for x in range(50):
+            for basis_node in self.basis:
+                for y in range(5):
+                    for inputData in self.basisInputNeighborhood(basis_node,self.radius):
+                        winning_node,error = self.findWinner(inputData)
+                        self.adaptWeights(winning_node,inputData)
+
+
+                        # Increase error value of winner (difference between input and node)
+                        # When error value > growth threshold, grow node if winner is a boundary node
+                        # Otherwise  distribute weights
+
+                        winning_node.addError(error)
+
+                        if winning_node.error > self.growth_threshold:
+                            print("grow")
+                            self.growNode(winning_node,inputData)
+
+                        self.iteration += 1                  
+                
+                
             
         # Reset LR to start value
-
 
 
     def smoothing(self):
         # Reduce learning rate and decrease neighborhood
         # Find winners and adapt weights as in growing phase
-        pass
+        self.smooth = True
+        for i in range(25):
+           for inputData in self.data:
+                # print(input)
+                # print(f"Iteration #: {self.iteration}")
+
+                winning_node, error = self.findWinner(inputData)
+                self.adaptWeights(winning_node, inputData)
+
+                # Increase error value of winner (difference between input and node)
+                # When error value > growth threshold, grow node if winner is a boundary node
+                # Otherwise  distribute weights
+
+                winning_node.addError(error)
+
+                if winning_node.error > self.growth_threshold:
+                    print("grow")
+                    self.growNode(winning_node, inputData)
+
+                self.iteration += 1 
+                # average_error = self.averageError()
+                # print(f"Average error {average_error}")
+                # max_error = self.maxError()
+                # print(f"Max error {average_error}")
+
+
 
     def train(self):
-        self.growing()
+        if self.connected:
+            self.growingConnected()
+        else:
+            self.growing()
         self.smoothing()
 
     def print(self):
-        for node in self.nodes:
-            print(node.array)
+        if self.connected:
+            node = self.nodes[0]
+            while node.left != None:
+                node = node.left
+            nodes = [node]
+            while node.right != None:
+                nodes.append(node.right)
+                node = node.right
+            return nodes
+        else:
+            return self.nodes
