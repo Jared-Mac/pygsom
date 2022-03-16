@@ -1,11 +1,8 @@
 import GSOM
 import numpy as np
 import matplotlib.pyplot as plt
-import visualize
-import networkx as nx 
 
-G = nx.Graph()
-G.add_node(GSOM.Node(0,1))
+
 
 
 
@@ -49,38 +46,28 @@ for h in range(4):
 np.random.shuffle(dataset)
 # print(dataset)
 
-basis = GSOM.GSOM(dataset,0.93,0.15)
+basis = GSOM.GSOM(dataset,0.95,0.15)
 
 basis.train()
 print(basis.averageError())
-
-# origin = np.array([0,0])
-# basis_nodes = []
-# for node in basis.nodes:
-#     basis_nodes.append((node,GSOM.distance(node.array, origin)))
-
-# basis_nodes = sorted(basis_nodes,key=GSOM.getKey)
-# print(basis_nodes)
-    
 
 
 
 # network = GSOM.GSOM(dataset, 0.92,0.40,connected=True,basis = basis_nodes)
 # network.train()
+
 nodes_x = []
 nodes_y = []
 basis_x = []
 basis_y = []
-for node in basis.connectNodes():
-    nodes_x.append(node.array[0])
-    nodes_y.append(node.array[1])
+
+
 # for node in network.basis:
 #     basis_x.append(node.array[0])
 #     basis_y.append(node.array[1])
 
 plt.plot(x_total, y_total, '.')
-plt.plot(nodes_x,nodes_y,'-o', markersize=10)
-# plt.plot(basis_x,basis_y,'-o', markersize=10)
-
+# plt.plot(nodes_x,nodes_y,'-o', markersize=10)
+basis.visualizeGraph()
 
 plt.show()
