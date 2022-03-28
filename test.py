@@ -64,7 +64,7 @@ print(basis.network)
 plt.plot(x_data, y_data, '.', markerfacecolor='red')
 
 
-print(f"Triangles: {sum(nx.triangles(basis.network).values()) /3}")
+basis.print()
 basis.visualizeGraph()
 
 plt.show()

@@ -14,6 +14,13 @@ def distance(n1,n2):
 def gpsDistance(n1,n2):
     return np.linalg.norm(n1-n2)
     return geopy.distance.distance(n1,n2).m
+
+
+def distanceToLine(point,n1,n2):
+    x_0, y_0 = point[0], point[1]
+    x_1,y_1 = n1[0],n1[1]
+    x_2,y_2 = n2[0],n2[1]
+    return (np.abs((x_2 - x_1)*(y_1 - y_0) - (x_1 - x_0)*(y_2 - y_1)))/(np.sqrt((x_2 - x_1)**2 + (y_2 - y_1)**2))
 def middleNode(n1,n2):
     x = (n1.array[0] + n2.array[0])/2
     y = (n1.array[1] + n2.array[1])/2
@@ -92,6 +99,14 @@ class GSOM:
                 error = d
                 winner = node
         return winner, error
+    
+    def findWinners(self,input,num_winners):
+        node_list = []
+        for node in self.network:
+            node_list.append([node,gpsDistance(input,node.array)])
+        node_list = sorted(node_list,key=getKey)
+
+        return node_list[:num_winners]
 
     def findTopTwo(self,input):
 
@@ -171,13 +186,20 @@ class GSOM:
 
         self.basis = new_basis
     def connectNodes(self):
-        nodes = self.network.nodes()
+        # nodes = self.network.nodes()
+        
         for datapoint in self.data:
             # find top 2 winnings nodes
-            winner1,winner2 = self.findTopTwo(datapoint)
+            winning_nodes = self.findWinners(datapoint, 2)
             # add edge
-
-            self.network.add_edge(winner1[0],winner2[0],weight=1)
+            distance = float("inf")
+            winner1,winner2 = None,None
+            for n1,n2 in itertools.combinations(winning_nodes,2):
+                d = distanceToLine(datapoint,n1[0].array,n2[0].array)
+                if d < distance:
+                    distance = d
+                    winner1, winner2 = n1[0],n2[0]
+            self.network.add_edge(winner1,winner2,weight=1)
 
         # 
         # Iterates through each pair of nodes
@@ -239,7 +261,13 @@ class GSOM:
             self.addNode(new_node)
 
         winning_node.error = 0
-
+    def collapse(self):
+        inv_map = {}
+        for k, v in nx.triangles(self.network).items():
+            inv_map[v] = inv_map.get(v, []) + [k]
+        print(f"Triangles: {inv_map[1]}")
+        for triangle in inv_map[1]:
+            
     def growing(self):
         # Iterate until terminal condition
         # Grab data point
@@ -296,8 +324,9 @@ class GSOM:
         # Reduce learning rate and decrease neighborhood
         # Find winners and adapt weights as in growing phase
         self.smooth = True
-        self.radius = self.radius / 2
+        self.radius = self.radius / 3
         for i in range(20):
+           self.mergeNodes()
            for inputData in self.data:
                 # print(input)
                 # print(f"Iteration #: {self.iteration}")
@@ -313,6 +342,17 @@ class GSOM:
                 # print(f"Max error {average_error}")
         self.mergeNodes()
         self.connectNodes()
+        for i in range(20):
+           for inputData in self.data:
+                # print(input)
+                # print(f"Iteration #: {self.iteration}")
+
+                winning_node, error = self.findWinner(inputData)
+                self.adaptWeights(winning_node, inputData)
+
+
+                self.iteration += 1
+
         print(self.network.size())
         
     def train(self):
@@ -321,11 +361,13 @@ class GSOM:
         else:
             self.growing()
         self.smoothing()
+        self.collapse()
         self.scaleGraph(1000)
     def adjacencyMatrix(self):
         return nx.convert_matrix.to_numpy_array(self.network)
     def print(self):
-        return list(self.network.nodes(data=True))
+        # print(list(self.network.nodes(data=True)))
+        print(f"Triangles: {sum(nx.triangles(self.network).values()) / 3}")
     def cleanData(self):
         new_data = []
         for datapoint in self.data:
@@ -340,7 +382,7 @@ class GSOM:
     def mergeNodes(self):
         nodes = list(self.network)
         for node in nodes:
-            neighbors = self.neighborhood(node,self.radius)
+            neighbors = self.neighborhood(node,self.radius / 2)
             for neighbor in neighbors:
                 if gpsDistance(node.array,neighbor.array) < self.radius / 2:
                     x = (node.array[0] + neighbor.array[0]) / 2
@@ -350,7 +392,7 @@ class GSOM:
                         self.network.remove_node(node)
                         self.network.remove_node(neighbor)
                     except nx.exception.NetworkXError:
-                        print("Node already removed")
+                        pass
 
     def visualizeGraph(self):
         pos_dict = {}
