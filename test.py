@@ -38,7 +38,7 @@ def sin_cos_dataset():
 
 
 
-dataset = np.load("data\small_scale.npy")
+dataset = np.load("data\san_diego_hikes.npy")
 dataset = dataset * 1000
 # dataset = sin_cos_dataset()
 np.random.shuffle(dataset)
@@ -48,7 +48,7 @@ np.random.shuffle(dataset)
 
 
 
-basis = GSOM.GSOM(dataset,0.925,0.10)
+basis = GSOM.GSOM(dataset,0.93,0.10)
 
 start_time = time.perf_counter() 
 basis.train()

@@ -1,20 +1,25 @@
 from audioop import reverse
+from email.policy import default
 from tkinter.tix import Tree
+import uuid
 import numpy as np
 import networkx as nx 
 import itertools
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
+from torch import float32
 import geopy.distance
 import matplotlib.cm as cm
-
+from uuid import uuid1
+from dataclasses import dataclass,field
 
 def distance(n1,n2):
     return np.linalg.norm(n1-n2)
 def gpsDistance(n1,n2):
     return np.linalg.norm(n1-n2)
     return geopy.distance.distance(n1,n2).m
-
+def generateID() -> int:
+    return uuid.uuid1()
 
 def distanceToLine(point,n1,n2):
     x_0, y_0 = point[0], point[1]
@@ -27,18 +32,17 @@ def middleNode(n1,n2):
     return Node(x,y)
 def getKey(item):
     return item[1]
-  
+
+@dataclass
 class Node:
-    def __init__(self, x,y):
-        """Initialize a node object with values x,y"""
-        self.x, self.y = x, y
-        self.array = np.array([x,y])
-        self.error = 0
-        self.left = None
-        self.right = None
-    
+    array: np.ndarray
+    id: int = field(init=False,default_factory=generateID)
+    error: float32 = 0
+    def __hash__(self): return hash(self.id)
     def addError(self,newError):
         self.error =+ newError
+    def __eq__(self,obj):
+        return self.id == obj.id
 
 class GSOM:
 
@@ -68,10 +72,10 @@ class GSOM:
         # n1 = Node(0,0)
         # n2 = Node(0.5,0.5)
         # n3 = Node(1,1)
-
-        n1 = Node(self.data[0][0],self.data[0][1])
-        n2 = Node(self.data[1][0],self.data[1][1])
-        n3 = Node(self.data[2][0],self.data[2][1])
+        
+        n1 = Node(np.array([self.data[0][0],self.data[0][1]]))
+        n2 = Node(np.array([self.data[1][0],self.data[1][1]]))
+        n3 = Node(np.array([self.data[2][0],self.data[2][1]]))
         n1.right = n2
         n2.left, n2.right = n1,n3
         n3.left = n2
@@ -116,12 +120,15 @@ class GSOM:
         node_list = sorted(node_list,key=getKey)
 
         return (node_list[0],node_list[1])
+    def adaptCollapseNode(self,node):
+        radius = self.radius * 1.5
+        for x in range(5):
+            for inputData in self.basisInputNeighborhood(node,radius):
+                node.array = node.array + 0.01 * gpsDistance(node.array,inputData)
 
     
     def neighborhood(self,focus,radius):
        
-        if self.smooth:
-            radius = radius / 3
         neighborhood = []
         for node in self.network:
             if gpsDistance(node.array,focus.array) < radius:
@@ -190,16 +197,20 @@ class GSOM:
         
         for datapoint in self.data:
             # find top 2 winnings nodes
-            winning_nodes = self.findWinners(datapoint, 2)
+            winner1,winner2 = self.findWinners(datapoint, 2)
             # add edge
-            distance = float("inf")
-            winner1,winner2 = None,None
-            for n1,n2 in itertools.combinations(winning_nodes,2):
-                d = distanceToLine(datapoint,n1[0].array,n2[0].array)
-                if d < distance:
-                    distance = d
-                    winner1, winner2 = n1[0],n2[0]
-            self.network.add_edge(winner1,winner2,weight=1)
+            self.network.add_edge(winner1[0],winner2[0],weight=1)
+            # distance = float("inf")
+            # winner1,winner2 = None,None
+            # for n1,n2 in itertools.combinations(winning_nodes,2):
+            #     d = distanceToLine(datapoint,n1[0].array,n2[0].array)
+            #     if d < distance:
+            #         distance = d
+            #         winner1, winner2 = n1[0],n2[0]
+            # if distance < self.radius * 1.5:
+            #     self.network.add_edge(winner1,winner2,weight=1)
+
+            
 
         # 
         # Iterates through each pair of nodes
@@ -225,53 +236,65 @@ class GSOM:
         for node in self.neighborhood(winning_node,self.radius):
             node.array = node.array + self.learningRate() * gpsDistance(node.array,input)
     def growNode(self,winning_node,input):
-        if self.connected:
-            if winning_node.left != None and winning_node.right != None:
-                input_node = Node(input[0],input[1])
-                new_node = middleNode(winning_node,input_node)
-                if distance(winning_node.left.array, input_node.array) < gpsDistance(winning_node.right.array, input_node.array):
-                    # Add new node to winning_nodes left
-                    # winning_node.left --- new_node --- winning_node
-                    winning_node.left.right = new_node
-                    new_node.right = winning_node
-                    new_node.left = winning_node.left
-                    winning_node.left = new_node
-                    
-                    self.addNode(new_node)
-                else: 
-                    # winning_node --- new_node --- winning_node.right
-                    winning_node.right.left = new_node
-                    new_node.left = winning_node
-                    winning_node.right = new_node
-                    new_node.left = winning_node
-                    self.addNode(new_node)
-                # pass
-            elif winning_node.left == None:
-                new_node = Node(input[0],input[1])
-                winning_node.left = new_node
-                new_node.right = winning_node
-                self.addNode(new_node)
-            elif winning_node.right == None:
-                new_node = Node(input[0],input[1])
-                winning_node.right = new_node
-                new_node.left = winning_node
-                self.addNode(new_node)
-        else: 
-            new_node = Node(input[0],input[1])
-            self.addNode(new_node)
+
+        new_node = Node(np.array(input))
+        self.addNode(new_node)
 
         winning_node.error = 0
     def collapse(self):
-        inv_map = {}
-        for k, v in nx.triangles(self.network).items():
-            inv_map[v] = inv_map.get(v, []) + [k]
-        print(f"Triangles: {inv_map[1]}")
-        for triangle in inv_map[1]:
+        last_node_pool = []
+        while(sum(nx.triangles(self.network).values()) / 3 >= 1):
+            print(sum(nx.triangles(self.network).values()) / 3)
+            inv_map = {}
+            for k, v in nx.triangles(self.network).items():
+                inv_map[v] = inv_map.get(v, []) + [k]
+            
+            degrees = inv_map.keys()
+            print(inv_map.keys())
+            max_deg = max(inv_map.keys())
+            node_pool = []
+            for key in degrees:
+                node_pool = node_pool + inv_map[key]
+            print(max_deg)
+            breakFlag = False
+            vertex = inv_map[max_deg][0]
+            print(vertex)
+            vertices = []
+            for x in range(max_deg):
+                for node1,node2 in itertools.combinations(node_pool,2):
+                    if self.network.has_edge(node1,node2) and self.network.has_edge(node1,vertex) and self.network.has_edge(vertex,node2):
+                        print(f"Collapsing Triangle")
+                        print(node1)
+                        print(vertices)
+                        if node1 in vertices:
+                            pass
+                        else:
+                            vertices.append(node1)
+                        print(node2)
+                        print(vertices)
+                        if node2 in vertices:
+                            pass
+                        else:
+                            vertices.append(node2)
+                        breakFlag = True
+                        break
+                if breakFlag:
+                    continue
+            sum_vertices = np.array([0,0])
+            for x in vertices:
+                sum_vertices = sum_vertices + x.array
+                self.network = nx.contracted_nodes(self.network,vertex,x,self_loops=False)
+            vertex.array = sum_vertices / len(vertices)
+            
+                    
+
             
     def growing(self):
         # Iterate until terminal condition
         # Grab data point
+        
         average_error = float("inf")
+        last_avg = average_error
         max_error = float("inf")
         # for x in range(200):
         while average_error > 0.07 and max_error > 0.10:
@@ -289,12 +312,19 @@ class GSOM:
 
                 winning_node.addError(error)
 
-                if winning_node.error > self.growth_threshold:
+                # if winning_node.error > self.growth_threshold:
+                #     self.growNode(winning_node,inputData)
+                if gpsDistance(winning_node.array,inputData) > self.growth_threshold:
                     self.growNode(winning_node,inputData)
 
+
                 self.iteration += 1
-            self.mergeNodes()
+            # self.mergeNodes()
             average_error = self.averageError()
+            if last_avg == average_error:
+                return
+            else:
+                last_avg = average_error
             print(f"Average error {average_error}")            
             max_error = self.maxError()
             print(f"Max error {max_error}")
@@ -324,9 +354,8 @@ class GSOM:
         # Reduce learning rate and decrease neighborhood
         # Find winners and adapt weights as in growing phase
         self.smooth = True
-        self.radius = self.radius / 3
+        self.radius = self.radius *2
         for i in range(20):
-           self.mergeNodes()
            for inputData in self.data:
                 # print(input)
                 # print(f"Iteration #: {self.iteration}")
@@ -340,8 +369,18 @@ class GSOM:
                 # print(f"Average error {average_error}")
                 # max_error = self.maxError()
                 # print(f"Max error {average_error}")
-        self.mergeNodes()
-        self.connectNodes()
+        # self.mergeNodes()
+        self.radius = self.radius / 2
+        for i in range(20):
+           for inputData in self.data:
+                # print(input)
+                # print(f"Iteration #: {self.iteration}")
+
+                winning_node, error = self.findWinner(inputData)
+                self.adaptWeights(winning_node, inputData)
+
+
+                self.iteration += 1 
         for i in range(20):
            for inputData in self.data:
                 # print(input)
@@ -360,8 +399,9 @@ class GSOM:
             self.growingConnected()
         else:
             self.growing()
-        self.smoothing()
+        self.connectNodes()
         self.collapse()
+        self.smoothing()
         self.scaleGraph(1000)
     def adjacencyMatrix(self):
         return nx.convert_matrix.to_numpy_array(self.network)
@@ -371,7 +411,7 @@ class GSOM:
     def cleanData(self):
         new_data = []
         for datapoint in self.data:
-            if len(self.basisInputNeighborhood(Node(datapoint[0],datapoint[1]),self.radius)) > 1:
+            if len(self.basisInputNeighborhood(Node(datapoint),self.radius)) > 1:
                 new_data.append(datapoint)
         self.data = new_data
     def scaleGraph(self,scaling_factor):
@@ -380,6 +420,7 @@ class GSOM:
             node.x = node.array[0]
             node.y = node.array[1]
     def mergeNodes(self):
+        pass
         nodes = list(self.network)
         for node in nodes:
             neighbors = self.neighborhood(node,self.radius / 2)
