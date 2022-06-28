@@ -38,7 +38,7 @@ def sin_cos_dataset():
 
 
 
-dataset = np.load("data\san_diego_hikes.npy")
+dataset = np.load("data/utah.npy")
 dataset = dataset * 1000
 # dataset = sin_cos_dataset()
 np.random.shuffle(dataset)

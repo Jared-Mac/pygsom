@@ -7,17 +7,115 @@ import networkx as nx
 import itertools
 import matplotlib.pyplot as plt
 from matplotlib.path import Path
-from torch import float32
-import geopy.distance
+
+
 import matplotlib.cm as cm
 from uuid import uuid1
 from dataclasses import dataclass,field
+import timeit 
+import numba as nb
+@nb.njit(fastmath=True)
+def norm(l):
+    s = 0.
+    for i in range(l.shape[0]):
+        s += l[i]**2
+    return np.sqrt(s)
+def convertGraph(input):
 
+    network = nx.Graph()
+
+    
+    added = {}
+
+    i = 0
+    for u,v,data in input.edges(keys=False,data=True):
+        i += 1
+        if u not in added:
+            n1 = Node(np.array([input.nodes[u]['y'],input.nodes[u]['x']], dtype=float))
+            network.add_node(n1)
+            added[u] = n1
+        if v not in added:
+            n2 = Node(np.array([input.nodes[v]['y'],input.nodes[v]['x']], dtype=float))
+            network.add_node(n2)
+            added[v] = n2
+        
+        polyline = list(data["geometry"].coords)
+
+        # Construct new node and edge
+        weights = np.array([polyline[0][1],polyline[0][0]],dtype=float)
+        prev_node = Node(weights)
+        network.add_node(prev_node)
+
+        network.add_edge(added[v],prev_node,weight=1)
+
+
+        for pair in list(data["geometry"].coords[2:-1]):
+            weights = np.array([pair[1],pair[0]],dtype=float)
+            new_node = Node(weights)
+            network.add_node(new_node)
+            network.add_edge(new_node,prev_node,weight=1)  
+            prev_node = new_node
+        
+
+        network.add_edge(prev_node,added[u],weight=1)  
+
+
+    # Clean Data to inside bounding box
+    # 32.93127,32.92748,-117.17359,-117.17801
+    min_lat = 32.92748
+    max_lat = 32.93127
+    min_long = -117.17359
+    max_long = -117.17801
+
+    for node in list(network.nodes):
+        lat = node.array[0]
+        long = node.array[1]
+        remove = False
+        if lat < min_lat or lat > max_lat:
+            remove = True
+        if abs(long) < abs(min_long) or abs(long) > abs(max_long):
+            remove = True
+        if remove:
+            network.remove_node(node)
+
+            
+
+    pos_dict = {}
+    for node in network:
+        pos_dict[node] = node.array
+    # edges,weights = zip(*nx.get_edge_attributes(network,).items())
+    # nx.draw(network, edgelist=edges,pos=pos_dict,node_size=50)
+    plt.show()
+
+    return network
+def findSegments(graph):
+    paths = dict(nx.all_pairs_shortest_path(graph))
+    segments = []
+    count = 0
+    nodes_j = []
+    for node,degree in list(graph.degree()):
+        if degree == 1 or degree > 2:
+            nodes_j.append(node)
+
+    for x1,x2 in itertools.combinations(nodes_j,2):
+        flag = True
+        if nx.has_path(graph,x1,x2):
+            for y in paths[x1][x2][1:-1]:
+                for z in nodes_j:
+                    if z == y:
+                        flag = False
+                        break
+            if flag:
+                segments.append(paths[x1][x2])
+            count += 1
+    print(f"amount of segments {len(segments)}")
+    return segments
 def distance(n1,n2):
-    return np.linalg.norm(n1-n2)
+    return np.linalg.norm(n1.array-n2.array,ord=3)
 def gpsDistance(n1,n2):
+    return norm(n1-n2)
     return np.linalg.norm(n1-n2)
-    return geopy.distance.distance(n1,n2).m
+
 def generateID() -> int:
     return uuid.uuid1()
 
@@ -33,11 +131,21 @@ def middleNode(n1,n2):
 def getKey(item):
     return item[1]
 
+# def findSegments(graph):
+#     # Find Shortest Paths
+
+#     # Find Intersection Nodes 
+
+#     # Cut paths on intersection
+
+#     # Return 
+#     return
+
 @dataclass
 class Node:
     array: np.ndarray
     id: int = field(init=False,default_factory=generateID)
-    error: float32 = 0
+    error: float = 0
     def __hash__(self): return hash(self.id)
     def addError(self,newError):
         self.error =+ newError
@@ -60,6 +168,7 @@ class GSOM:
         self.connected = connected
         self.smooth = False
         self.cleanData()
+        self.weight_change = 0
 
         if connected:
             self.basis = []
@@ -91,14 +200,14 @@ class GSOM:
         # learning rate = at iteration k, with r nodes, initial learning rate lr_0
         # d is constant, how much the learning rate should drop
         # lr_0*d^floor((1+k)/r)
-        if self.smoothing:
-            return 0.5*(0.01**np.floor((1+self.iteration)/self.getNetworkSize()))
-        return 1*(0.02**np.floor((1+self.iteration)/self.getNetworkSize()))
+        return 1*(0.02**(1+self.iteration)/self.getNetworkSize())
     def findWinner(self,input):
         error=float("inf")
         winner = None
         for node in self.network:
+            # starttime = timeit.default_timer()
             d = gpsDistance(input,node.array)
+            # print("The time difference is :", timeit.default_timer() - starttime)
             if(d < error):
                 error = d
                 winner = node
@@ -107,7 +216,9 @@ class GSOM:
     def findWinners(self,input,num_winners):
         node_list = []
         for node in self.network:
+            # starttime = timeit.default_timer()
             node_list.append([node,gpsDistance(input,node.array)])
+            # print("The time difference is :", timeit.default_timer() - starttime)
         node_list = sorted(node_list,key=getKey)
 
         return node_list[:num_winners]
@@ -212,17 +323,21 @@ class GSOM:
 
             
 
-        # 
-        # Iterates through each pair of nodes
-        # scores = []
-        # for n1,n2 in itertools.combinations(nodes,2):
-        #     score = self.calculateLinkScore(n1,n2)
-        #     scores.append(score)
-        #     if score > 1:
-        #         self.network.add_edge(n1,n2,weight=score)
-        # scores.sort(reverse=True)  
-        # print(scores)
-    
+    def connectRelativeNeighborhood(self):
+        for u,v in itertools.combinations(list(self.network.nodes),2):
+            new_list = list(self.network.nodes)
+            new_list.remove(u)
+            new_list.remove(v)
+            connect  = True
+            for z in new_list:
+                base_distance = distance(u,v)
+                if distance(z,u) < base_distance and distance(z,v) < base_distance:
+                    connect = False
+                    break
+            if connect:
+                self.network.add_edge(u,v,weight=1)
+
+
     def adaptWeights(self,winning_node,input):
         # Adapt weight of winner and nodes within neighborhood
         #   Weights are distributed proportionally to neighborhood nodes by distance to winner
@@ -234,7 +349,9 @@ class GSOM:
         # w_j(k),w_j(k+1) are nodes, j, before and after adaption
 
         for node in self.neighborhood(winning_node,self.radius):
-            node.array = node.array + self.learningRate() * gpsDistance(node.array,input)
+            weight_update = self.learningRate() * gpsDistance(node.array,input)
+            self.weight_change += weight_update
+            node.array = node.array + weight_update
     def growNode(self,winning_node,input):
 
         new_node = Node(np.array(input))
@@ -244,34 +361,31 @@ class GSOM:
     def collapse(self):
         last_node_pool = []
         while(sum(nx.triangles(self.network).values()) / 3 >= 1):
-            print(sum(nx.triangles(self.network).values()) / 3)
             inv_map = {}
             for k, v in nx.triangles(self.network).items():
                 inv_map[v] = inv_map.get(v, []) + [k]
             
             degrees = inv_map.keys()
-            print(inv_map.keys())
+
             max_deg = max(inv_map.keys())
             node_pool = []
             for key in degrees:
                 node_pool = node_pool + inv_map[key]
-            print(max_deg)
+
             breakFlag = False
             vertex = inv_map[max_deg][0]
-            print(vertex)
+
             vertices = []
             for x in range(max_deg):
                 for node1,node2 in itertools.combinations(node_pool,2):
                     if self.network.has_edge(node1,node2) and self.network.has_edge(node1,vertex) and self.network.has_edge(vertex,node2):
                         print(f"Collapsing Triangle")
-                        print(node1)
-                        print(vertices)
+
                         if node1 in vertices:
                             pass
                         else:
                             vertices.append(node1)
-                        print(node2)
-                        print(vertices)
+
                         if node2 in vertices:
                             pass
                         else:
@@ -296,9 +410,12 @@ class GSOM:
         average_error = float("inf")
         last_avg = average_error
         max_error = float("inf")
-        # for x in range(200):
-        while average_error > 0.07 and max_error > 0.10:
+
+        for x in range(200):
+        # while error_change > 0.01:
+            self.weight_change = float(0)
             for inputData in self.data:
+                
                 # print(input)
                 # print(f"Iteration #: {self.iteration}")
             
@@ -320,14 +437,18 @@ class GSOM:
 
                 self.iteration += 1
             # self.mergeNodes()
+            
             average_error = self.averageError()
-            if last_avg == average_error:
-                return
-            else:
-                last_avg = average_error
-            print(f"Average error {average_error}")            
             max_error = self.maxError()
+            
+
+            print(f"Weight Change {self.weight_change}")
+            print(f"Average error {average_error}")            
             print(f"Max error {max_error}")
+            if self.weight_change <0.01:
+                print("Weights didn't change")
+                return
+
 
     def growingConnected(self):
         for x in range(50):
@@ -354,45 +475,32 @@ class GSOM:
         # Reduce learning rate and decrease neighborhood
         # Find winners and adapt weights as in growing phase
         self.smooth = True
-        self.radius = self.radius *2
-        for i in range(20):
-           for inputData in self.data:
-                # print(input)
-                # print(f"Iteration #: {self.iteration}")
-
+        self.radius = self.radius * 2
+        for i in range(50):
+            self.weight_change = 0
+            for inputData in self.data:
                 winning_node, error = self.findWinner(inputData)
                 self.adaptWeights(winning_node, inputData)
-
-
                 self.iteration += 1 
-                # average_error = self.averageError()
-                # print(f"Average error {average_error}")
-                # max_error = self.maxError()
-                # print(f"Max error {average_error}")
-        # self.mergeNodes()
-        self.radius = self.radius / 2
-        for i in range(20):
-           for inputData in self.data:
-                # print(input)
-                # print(f"Iteration #: {self.iteration}")
+            print(f"Weight Change {self.weight_change}")
+            if self.weight_change < 0.01:
+                print("Weights didn't change")
+                break
 
+
+        self.radius = self.radius / 3
+        for i in range(20):
+            self.weight_change = 0  
+            for inputData in self.data:
                 winning_node, error = self.findWinner(inputData)
                 self.adaptWeights(winning_node, inputData)
-
-
                 self.iteration += 1 
-        for i in range(20):
-           for inputData in self.data:
-                # print(input)
-                # print(f"Iteration #: {self.iteration}")
-
-                winning_node, error = self.findWinner(inputData)
-                self.adaptWeights(winning_node, inputData)
+            print(f"Weight Change {self.weight_change}")
+            if self.weight_change < 0.01:
+                print("Weights didn't change")
+                break
 
 
-                self.iteration += 1
-
-        print(self.network.size())
         
     def train(self):
         if self.connected:
@@ -400,9 +508,11 @@ class GSOM:
         else:
             self.growing()
         self.connectNodes()
+        # self.connectRelativeNeighborhood()
         self.collapse()
         self.smoothing()
         self.scaleGraph(1000)
+        return
     def adjacencyMatrix(self):
         return nx.convert_matrix.to_numpy_array(self.network)
     def print(self):
@@ -419,6 +529,16 @@ class GSOM:
             node.array = node.array / scaling_factor
             node.x = node.array[0]
             node.y = node.array[1]
+    
+    def getSegments(network):
+        pass
+    def getNodes_h(network):
+        nodes_h = []
+        for node,degree in list(self.network.degree()):
+            if degree == 0 or degree> 2:
+                nodes_h.append(node)
+        return
+
     def mergeNodes(self):
         pass
         nodes = list(self.network)
@@ -435,6 +555,50 @@ class GSOM:
                     except nx.exception.NetworkXError:
                         pass
 
+
+    def completeness():
+        for edge_c in self.network.Edges():
+            for edge_t in ground_truth:
+                n = 0
+                distanceSum = 0
+                for point_c in s_c:
+                    distanceSum += distance(point_c,edge_t)
+                    n += 1
+                # distance  edge_c & edge_t
+            # flag edge_t with minimum distance to edge_c as matched segment edge_t_h
+        # l = total length of matched segments of edge_t_h
+        # L = total length of segments edge_t in ground truth network
+        # return l / L            
+        return 
+    def precision():
+        m = 0
+        for edge_c in self.network.Edges():
+            for edge_t in ground_truth:
+                n = 0
+                distanceSum = 0
+                for point_c in s_c:
+                    distanceSum += distance(point_c,edge_t)
+                    n += 1
+            #  edge_t_h = edge_t with minimum distance to edge_c
+            # m += 1
+            # precisionArray[m] = distance between edge_c and edge_t_h
+        # return average and std of precisionArray
+        return
+    def topology():
+        # A_t = Floyd(A_t)
+        # A_c = Floyd(A_c)
+        # a_t = average of non-diagonal elements (A_t)
+        # a_c =  average of non-diagonal elements (A_c)
+        # return a_t / a_c
+        return
+    def compareNetwork(self):
+        
+        self.completeness()
+        self.precision()
+        self.topology()
+
+
+
     def visualizeGraph(self):
         pos_dict = {}
         for node in self.network:
@@ -442,5 +606,5 @@ class GSOM:
         edges,weights = zip(*nx.get_edge_attributes(self.network,'weight').items())
         # nx.draw(self.network, edgelist=edges, edge_color=weights,pos=pos_dict,edge_cmap=cm.Reds,node_size=50)
         nx.draw(self.network, edgelist=edges,pos=pos_dict,node_size=50)
-        plt.show()
+        # plt.show()
 
